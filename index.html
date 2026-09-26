@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#050505" />
+    <meta name="description" content="一个安静、简单、会留下记录的本地计时器。" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="林林时间" />
+    <link rel="manifest" href="./manifest.json" />
+    <link rel="apple-touch-icon" href="./icons/icon-180.png" />
+    <link rel="icon" type="image/png" href="./icons/icon-192.png" />
+    <link rel="stylesheet" href="./style.css" />
+    <title>林林时间 · 极简事件计时器</title>
+  </head>
+  <body>
+    <div class="paper-grain" aria-hidden="true"></div>
+
+    <main class="app-shell">
+      <section id="homeView" class="view view--active" aria-labelledby="homeTitle">
+        <header class="home-header">
+          <div class="brand-block">
+            <div class="source-sprite source-sprite--person" role="img" aria-label="戴耳机的手绘小人标志"></div>
+            <div class="title-block">
+              <p class="eyebrow">留一点时间给此刻</p>
+              <h1 id="homeTitle">林林时间</h1>
+            </div>
+          </div>
+          <button id="settingsButton" class="text-button" type="button" aria-label="打开数据设置">数据</button>
+        </header>
+
+        <div class="home-grid">
+          <div class="start-panel sketch-card">
+            <form id="timerForm" novalidate>
+              <label class="field-label" for="eventName">现在准备做什么</label>
+              <input id="eventName" name="eventName" class="text-input" type="text" maxlength="60" placeholder="比如：做音乐" autocomplete="off" required />
+              <div id="recentEvents" class="quick-list" aria-label="最近使用的事件"></div>
+
+              <label class="field-label" for="location">在哪里 <span>可以不填</span></label>
+              <input id="location" name="location" class="text-input" type="text" maxlength="60" placeholder="比如：家、书桌" autocomplete="off" />
+              <div id="recentLocations" class="quick-list" aria-label="最近使用的地点"></div>
+
+              <fieldset class="duration-fieldset">
+                <legend class="field-label">留多少分钟</legend>
+                <div id="durationOptions" class="duration-options" aria-label="快捷时间">
+                  <button class="duration-chip" type="button" data-minutes="15">15</button>
+                  <button class="duration-chip duration-chip--selected" type="button" data-minutes="25">25</button>
+                  <button class="duration-chip" type="button" data-minutes="45">45</button>
+                  <button class="duration-chip" type="button" data-minutes="60">60</button>
+                  <label class="custom-duration">
+                    <span class="sr-only">自定义分钟数</span>
+                    <input id="customMinutes" type="number" inputmode="numeric" min="1" max="1440" placeholder="自定" />
+                    <span>分</span>
+                  </label>
+                </div>
+              </fieldset>
+
+              <p id="formMessage" class="form-message" role="alert"></p>
+              <div class="launch-row">
+                <div class="source-sprite source-sprite--cat cat-start" aria-hidden="true"></div>
+                <button class="primary-button" type="submit"><span>开始</span><span aria-hidden="true">↗</span></button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <section class="history-section" aria-labelledby="historyTitle">
+          <div class="section-heading">
+            <h2 id="historyTitle">留下的痕迹</h2>
+            <span id="recordCount" class="count-mark" aria-live="polite"></span>
+          </div>
+          <div id="historyList" class="history-list"></div>
+          <div id="emptyHistory" class="empty-state">
+            <span class="empty-line" aria-hidden="true"></span>
+            <p>今天还没留下痕迹</p>
+          </div>
+        </section>
+      </section>
+
+      <section id="timerView" class="view timer-view" aria-labelledby="timerEventName" hidden>
+        <div class="timer-center">
+          <div class="source-sprite source-sprite--cat timer-cat" aria-hidden="true"></div>
+          <p id="timerLocation" class="timer-location"></p>
+          <h1 id="timerEventName" class="timer-event"></h1>
+          <p id="countdown" class="countdown" role="timer" aria-live="off">25:00</p>
+          <p id="timerStatus" class="timer-status" aria-live="polite">正在计时</p>
+          <div class="timer-actions">
+            <button id="pauseButton" class="secondary-button" type="button">暂停</button>
+            <button id="finishEarlyButton" class="quiet-danger-button" type="button">提前结束</button>
+          </div>
+        </div>
+        <span class="pencil-scratch pencil-scratch--one" aria-hidden="true"></span>
+        <span class="pencil-scratch pencil-scratch--two" aria-hidden="true"></span>
+      </section>
+
+      <section id="completeView" class="view complete-view" aria-labelledby="completeTitle" hidden>
+        <div class="complete-card sketch-card">
+          <p class="eyebrow">这段时间已经收好</p>
+          <h1 id="completeTitle">做完了</h1>
+          <p id="completeSummary" class="complete-summary"></p>
+          <div class="complete-figures" aria-hidden="true">
+            <div class="source-sprite source-sprite--cat complete-cat"></div>
+            <div class="source-sprite source-sprite--person complete-person"></div>
+          </div>
+          <button id="completeHomeButton" class="primary-button" type="button"><span>回到首页</span><span aria-hidden="true">→</span></button>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="recordDialog" class="dialog-card">
+      <form id="recordForm" method="dialog">
+        <div class="dialog-heading">
+          <h2>改一改这条记录</h2>
+          <button id="closeRecordButton" class="icon-button" type="button" aria-label="关闭">×</button>
+        </div>
+        <input id="editRecordId" type="hidden" />
+        <label class="field-label" for="editEventName">事件</label>
+        <input id="editEventName" class="text-input" type="text" maxlength="60" required />
+        <label class="field-label" for="editLocation">地点 <span>可以不填</span></label>
+        <input id="editLocation" class="text-input" type="text" maxlength="60" />
+        <div class="dialog-actions">
+          <button id="cancelRecordButton" class="secondary-button" type="button">取消</button>
+          <button id="saveRecordButton" class="primary-button primary-button--small" value="default">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="settingsDialog" class="dialog-card settings-dialog">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">只存在这台设备上</p>
+          <h2>数据</h2>
+        </div>
+        <button id="closeSettingsButton" class="icon-button" type="button" aria-label="关闭">×</button>
+      </div>
+      <p class="dialog-note">导出一份 JSON 备份，换设备时可以再导入。</p>
+      <div class="settings-actions">
+        <button id="exportButton" class="secondary-button" type="button">导出数据</button>
+        <label class="secondary-button file-button" for="importInput">导入数据</label>
+        <input id="importInput" class="sr-only" type="file" accept="application/json,.json" />
+        <button id="clearButton" class="quiet-danger-button quiet-danger-button--boxed" type="button">清空全部数据</button>
+      </div>
+      <p id="settingsMessage" class="form-message" role="status"></p>
+    </dialog>
+
+    <script src="./app.js" defer></script>
+  </body>
+</html>
