@@ -114,7 +114,7 @@ function saveActiveTimer() {
 function loadActiveTimer() {
   try {
     const value = JSON.parse(localStorage.getItem(CONFIG.activeTimerKey));
-    if (!value || !value.id || !value.eventName || !Number.isFinite(value.targetEndTime)) return null;
+    if (!value || !value.id || !value.eventName || !Number.isFinite(value.startTime)) return null;
     return value;
   } catch {
     localStorage.removeItem(CONFIG.activeTimerKey);
@@ -131,8 +131,8 @@ function showView(view) {
   window.scrollTo({ top: 0, behavior: "auto" });
 }
 
-function formatRemaining(milliseconds) {
-  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+function formatElapsed(milliseconds) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
@@ -141,19 +141,17 @@ function formatRemaining(milliseconds) {
     : `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-function getRemaining() {
+function getElapsed() {
   if (!activeTimer) return 0;
-  return activeTimer.paused
-    ? Math.max(0, activeTimer.remainingAtPause || 0)
-    : Math.max(0, activeTimer.targetEndTime - Date.now());
+  const end = activeTimer.paused ? activeTimer.pauseStartedAt : Date.now();
+  return Math.max(0, end - activeTimer.startTime - (activeTimer.totalPausedMs || 0));
 }
 
 function updateTimerDisplay() {
   if (!activeTimer) return;
-  const remaining = getRemaining();
-  elements.countdown.textContent = formatRemaining(remaining);
-  document.title = `${formatRemaining(remaining)} · ${activeTimer.eventName}`;
-  if (!activeTimer.paused && remaining <= 0) completeTimer("完成");
+  const elapsed = getElapsed();
+  elements.countdown.textContent = formatElapsed(elapsed);
+  document.title = `${formatElapsed(elapsed)} · ${activeTimer.eventName}`;
 }
 
 function startTicker() {
@@ -240,17 +238,9 @@ async function startTimer(event) {
   event.preventDefault();
   const eventName = elements.eventName.value.trim();
   const location = elements.location.value.trim();
-  const customValue = Number.parseInt(elements.customMinutes.value, 10);
-  const minutes = elements.customMinutes.value ? customValue : selectedMinutes;
-
   if (!eventName) {
     elements.formMessage.textContent = "先写下要做的事。";
     elements.eventName.focus();
-    return;
-  }
-  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
-    elements.formMessage.textContent = "时间请填写 1 到 1440 分钟。";
-    elements.customMinutes.focus();
     return;
   }
 
@@ -261,16 +251,11 @@ async function startTimer(event) {
     eventName,
     location,
     startTime: now,
-    targetEndTime: now + minutes * 60_000,
-    plannedMinutes: minutes,
     paused: false,
-    remainingAtPause: null,
     pauseStartedAt: null,
     totalPausedMs: 0,
   };
   saveActiveTimer();
-  unlockAudio();
-  void requestNotificationPermission();
   showTimerView();
 }
 
@@ -279,12 +264,9 @@ function togglePause() {
   if (activeTimer.paused) {
     const now = Date.now();
     activeTimer.totalPausedMs += Math.max(0, now - activeTimer.pauseStartedAt);
-    activeTimer.targetEndTime = now + activeTimer.remainingAtPause;
     activeTimer.paused = false;
     activeTimer.pauseStartedAt = null;
-    activeTimer.remainingAtPause = null;
   } else {
-    activeTimer.remainingAtPause = getRemaining();
     activeTimer.paused = true;
     activeTimer.pauseStartedAt = Date.now();
   }
@@ -299,18 +281,16 @@ async function completeTimer(status) {
   const timer = { ...activeTimer };
   const now = Date.now();
   const activeElapsed = Math.max(0, now - timer.startTime - (timer.totalPausedMs || 0) - (timer.paused ? Math.max(0, now - timer.pauseStartedAt) : 0));
-  const actualMinutes = status === "完成"
-    ? timer.plannedMinutes
-    : Math.max(0, Math.round(activeElapsed / 60_000));
+  const actualMinutes = Math.max(0, Math.round(activeElapsed / 60_000));
   const record = {
     id: timer.id,
     eventName: timer.eventName,
     location: timer.location,
     startTime: timer.startTime,
-    endTime: status === "完成" ? Math.min(now, timer.targetEndTime) : now,
-    plannedMinutes: timer.plannedMinutes,
+    endTime: now,
+    plannedMinutes: 0,
     actualMinutes,
-    status,
+    status: "完成",
   };
 
   try {
@@ -318,11 +298,8 @@ async function completeTimer(status) {
     activeTimer = null;
     saveActiveTimer();
     document.title = `${CONFIG.appName} · 极简事件计时器`;
-    elements.completeSummary.textContent = status === "完成"
-      ? `${record.eventName} · ${record.plannedMinutes}分钟`
-      : `${record.eventName} · 提前收尾，实际 ${record.actualMinutes}分钟`;
+    elements.completeSummary.textContent = `${record.eventName} · 实际 ${record.actualMinutes}分钟`;
     showView(elements.completeView);
-    if (status === "完成") void notifyFinished(timer);
   } catch (error) {
     console.error(error);
     elements.timerStatus.textContent = "记录暂时没有保存，请再试一次";
@@ -379,7 +356,7 @@ async function renderHistory() {
       items.forEach((record) => {
         const date = new Date(record.endTime);
         const time = date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
-        const minutes = record.status === "完成" ? record.plannedMinutes : record.actualMinutes;
+        const minutes = record.actualMinutes;
         const meta = [record.location, `${minutes}分钟`, record.status === "提前结束" ? "提前结束" : ""].filter(Boolean).join(" · ");
         const row = document.createElement("article");
         row.className = "record-row";
@@ -554,7 +531,7 @@ async function init() {
   elements.timerForm.addEventListener("submit", startTimer);
   elements.pauseButton.addEventListener("click", togglePause);
   elements.finishEarlyButton.addEventListener("click", () => {
-    if (confirm("现在提前结束吗？这段时间仍会被记录。")) void completeTimer("提前结束");
+    if (confirm("现在结束计时吗？这段时间会被记录。")) void completeTimer("完成");
   });
   elements.completeHomeButton.addEventListener("click", goHome);
   elements.historyList.addEventListener("click", handleHistoryClick);
@@ -578,8 +555,7 @@ async function init() {
   await renderHistory();
   activeTimer = loadActiveTimer();
   if (activeTimer) {
-    if (!activeTimer.paused && activeTimer.targetEndTime <= Date.now()) await completeTimer("完成");
-    else showTimerView();
+    showTimerView();
   } else {
     showView(elements.homeView);
   }
