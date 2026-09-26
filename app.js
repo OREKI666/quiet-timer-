@@ -1,25 +1,15 @@
 "use strict";
 
-// 最常改的内容都集中在这里：标题、快捷时长、图片路径和数据版本。
-const CONFIG = {
-  appName: "林林时间",
-  durationOptions: [15, 25, 45, 60],
-  defaultMinutes: 25,
-  imagePaths: {
-    source: "./images/home-visual.jpg",
-    person: "./images/person-mark.png",
-    cat: "./images/cat-mark.png",
-  },
-  dbName: "quiet-timer-db",
-  dbVersion: 1,
-  storeName: "records",
-  activeTimerKey: "quiet-timer-active",
-};
+const APP_NAME = "林林时间";
+const DB_NAME = "quiet-timer-db";
+const DB_VERSION = 1;
+const STORE_NAME = "records";
+const ACTIVE_KEY = "quiet-timer-active";
 
-const $ = (selector) => document.querySelector(selector);
-const $$ = (selector) => [...document.querySelectorAll(selector)];
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
 
-const elements = {
+const el = {
   views: $$(".view"),
   homeView: $("#homeView"),
   timerView: $("#timerView"),
@@ -27,11 +17,9 @@ const elements = {
   timerForm: $("#timerForm"),
   eventName: $("#eventName"),
   location: $("#location"),
-  customMinutes: $("#customMinutes"),
-  durationOptions: $("#durationOptions"),
+  formMessage: $("#formMessage"),
   recentEvents: $("#recentEvents"),
   recentLocations: $("#recentLocations"),
-  formMessage: $("#formMessage"),
   historyList: $("#historyList"),
   emptyHistory: $("#emptyHistory"),
   recordCount: $("#recordCount"),
@@ -40,7 +28,7 @@ const elements = {
   countdown: $("#countdown"),
   timerStatus: $("#timerStatus"),
   pauseButton: $("#pauseButton"),
-  finishEarlyButton: $("#finishEarlyButton"),
+  finishButton: $("#finishEarlyButton"),
   completeSummary: $("#completeSummary"),
   completeHomeButton: $("#completeHomeButton"),
   recordDialog: $("#recordDialog"),
@@ -50,339 +38,306 @@ const elements = {
   editRecordId: $("#editRecordId"),
   editEventName: $("#editEventName"),
   editLocation: $("#editLocation"),
-  saveRecordButton: $("#saveRecordButton"),
   settingsDialog: $("#settingsDialog"),
   settingsButton: $("#settingsButton"),
   closeSettingsButton: $("#closeSettingsButton"),
   exportButton: $("#exportButton"),
   importInput: $("#importInput"),
   clearButton: $("#clearButton"),
-  settingsMessage: $("#settingsMessage"),
+  settingsMessage: $("#settingsMessage")
 };
 
-let dbPromise;
+let dbPromise = null;
 let activeTimer = null;
 let ticker = null;
-let selectedMinutes = CONFIG.defaultMinutes;
-let audioContext = null;
-let isCompleting = false;
+let saving = false;
 
-function openDatabase() {
+function showView(view) {
+  el.views.forEach((v) => {
+    const active = v === view;
+    v.hidden = !active;
+    v.classList.toggle("view--active", active);
+  });
+  window.scrollTo(0, 0);
+}
+
+function openDB() {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
-    const request = indexedDB.open(CONFIG.dbName, CONFIG.dbVersion);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(CONFIG.storeName)) {
-        const store = db.createObjectStore(CONFIG.storeName, { keyPath: "id" });
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        const store = db.createObjectStore(STORE_NAME, { keyPath: "id" });
         store.createIndex("endTime", "endTime");
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
   });
   return dbPromise;
 }
 
-async function runStore(mode, action) {
-  const db = await openDatabase();
+async function storeRequest(mode, callback) {
+  const db = await openDB();
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction(CONFIG.storeName, mode);
-    const store = transaction.objectStore(CONFIG.storeName);
-    const request = action(store);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    const tx = db.transaction(STORE_NAME, mode);
+    const store = tx.objectStore(STORE_NAME);
+    const req = callback(store);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
   });
 }
 
-const recordStore = {
+const records = {
   all: async () => {
-    const records = await runStore("readonly", (store) => store.getAll());
-    return records.sort((a, b) => b.endTime - a.endTime);
+    const list = await storeRequest("readonly", (s) => s.getAll());
+    return list.sort((a, b) => (b.endTime || 0) - (a.endTime || 0));
   },
-  get: (id) => runStore("readonly", (store) => store.get(id)),
-  put: (record) => runStore("readwrite", (store) => store.put(record)),
-  delete: (id) => runStore("readwrite", (store) => store.delete(id)),
-  clear: () => runStore("readwrite", (store) => store.clear()),
+  get: (id) => storeRequest("readonly", (s) => s.get(id)),
+  put: (record) => storeRequest("readwrite", (s) => s.put(record)),
+  delete: (id) => storeRequest("readwrite", (s) => s.delete(id)),
+  clear: () => storeRequest("readwrite", (s) => s.clear())
 };
 
-function saveActiveTimer() {
-  if (activeTimer) localStorage.setItem(CONFIG.activeTimerKey, JSON.stringify(activeTimer));
-  else localStorage.removeItem(CONFIG.activeTimerKey);
+function makeId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return "timer-" + Date.now() + "-" + Math.random().toString(16).slice(2);
 }
 
-function loadActiveTimer() {
+function saveActive() {
+  if (activeTimer) localStorage.setItem(ACTIVE_KEY, JSON.stringify(activeTimer));
+  else localStorage.removeItem(ACTIVE_KEY);
+}
+
+function loadActive() {
   try {
-    const value = JSON.parse(localStorage.getItem(CONFIG.activeTimerKey));
+    const value = JSON.parse(localStorage.getItem(ACTIVE_KEY));
     if (!value || !value.id || !value.eventName || !Number.isFinite(value.startTime)) return null;
+    if (!Number.isFinite(value.totalPausedMs)) value.totalPausedMs = 0;
+    if (typeof value.paused !== "boolean") value.paused = false;
     return value;
   } catch {
-    localStorage.removeItem(CONFIG.activeTimerKey);
+    localStorage.removeItem(ACTIVE_KEY);
     return null;
   }
 }
 
-function showView(view) {
-  elements.views.forEach((item) => {
-    const active = item === view;
-    item.hidden = !active;
-    item.classList.toggle("view--active", active);
-  });
-  window.scrollTo({ top: 0, behavior: "auto" });
-}
-
-function formatElapsed(milliseconds) {
-  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  return hours > 0
-    ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
-    : `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}
-
-function getElapsed() {
+function elapsedMs() {
   if (!activeTimer) return 0;
-  const end = activeTimer.paused ? activeTimer.pauseStartedAt : Date.now();
+  const end = activeTimer.paused && Number.isFinite(activeTimer.pauseStartedAt)
+    ? activeTimer.pauseStartedAt
+    : Date.now();
   return Math.max(0, end - activeTimer.startTime - (activeTimer.totalPausedMs || 0));
 }
 
-function updateTimerDisplay() {
+function formatClock(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0")
+    : String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+}
+
+function formatDuration(seconds) {
+  const sec = Math.max(0, Math.round(Number(seconds) || 0));
+  if (sec < 60) return sec + "秒";
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return s ? m + "分" + s + "秒" : m + "分钟";
+}
+
+function updateClock() {
   if (!activeTimer) return;
-  const elapsed = getElapsed();
-  elements.countdown.textContent = formatElapsed(elapsed);
-  document.title = `${formatElapsed(elapsed)} · ${activeTimer.eventName}`;
+  const text = formatClock(elapsedMs());
+  el.countdown.textContent = text;
+  document.title = text + " · " + activeTimer.eventName;
 }
 
 function startTicker() {
-  clearInterval(ticker);
-  updateTimerDisplay();
-  ticker = window.setInterval(updateTimerDisplay, 500);
+  if (ticker) clearInterval(ticker);
+  updateClock();
+  ticker = setInterval(updateClock, 500);
 }
 
 function stopTicker() {
-  clearInterval(ticker);
+  if (ticker) clearInterval(ticker);
   ticker = null;
 }
 
-function createId() {
-  return globalThis.crypto?.randomUUID?.() || `timer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function unlockAudio() {
-  try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return;
-    audioContext ||= new AudioCtx();
-    if (audioContext.state === "suspended") audioContext.resume();
-  } catch { /* 自动降级 */ }
-}
-
-function playFinishSound() {
-  try {
-    unlockAudio();
-    if (!audioContext) return;
-    const now = audioContext.currentTime;
-    [0, 0.22].forEach((offset) => {
-      const oscillator = audioContext.createOscillator();
-      const gain = audioContext.createGain();
-      oscillator.type = "sine";
-      oscillator.frequency.setValueAtTime(offset ? 660 : 520, now + offset);
-      gain.gain.setValueAtTime(0.0001, now + offset);
-      gain.gain.exponentialRampToValueAtTime(0.18, now + offset + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.18);
-      oscillator.connect(gain).connect(audioContext.destination);
-      oscillator.start(now + offset);
-      oscillator.stop(now + offset + 0.2);
-    });
-  } catch { /* 自动降级 */ }
-}
-
-async function requestNotificationPermission() {
-  try {
-    if ("Notification" in window && Notification.permission === "default") {
-      await Notification.requestPermission();
-    }
-  } catch { /* 自动降级 */ }
-}
-
-async function notifyFinished(timer) {
-  playFinishSound();
-  try { navigator.vibrate?.([120, 80, 120]); } catch { /* 自动降级 */ }
-  if (!("Notification" in window) || Notification.permission !== "granted") return;
-  const body = `${timer.eventName} · ${timer.plannedMinutes}分钟完成`;
-  try {
-    const registration = await navigator.serviceWorker?.ready;
-    if (registration?.showNotification) {
-      await registration.showNotification("时间到了", { body, icon: "./icons/icon-192.png", badge: "./icons/icon-192.png" });
-    } else {
-      new Notification("时间到了", { body });
-    }
-  } catch {
-    try { new Notification("时间到了", { body }); } catch { /* 自动降级 */ }
-  }
-}
-
-function showTimerView() {
+function showTimer() {
   if (!activeTimer) return;
-  elements.timerView.classList.toggle("is-paused", activeTimer.paused);
-  elements.timerEventName.textContent = activeTimer.eventName;
-  elements.timerLocation.textContent = activeTimer.location ? `在 ${activeTimer.location}` : "";
-  elements.pauseButton.textContent = activeTimer.paused ? "继续" : "暂停";
-  elements.timerStatus.textContent = activeTimer.paused ? "先停在这里" : "正在计时";
-  showView(elements.timerView);
+  el.timerEventName.textContent = activeTimer.eventName;
+  el.timerLocation.textContent = activeTimer.location ? "在 " + activeTimer.location : "";
+  el.pauseButton.textContent = activeTimer.paused ? "继续" : "暂停";
+  el.timerStatus.textContent = activeTimer.paused ? "先停在这里" : "正在计时";
+  el.timerView.classList.toggle("is-paused", activeTimer.paused);
+  showView(el.timerView);
   startTicker();
 }
 
-async function startTimer(event) {
+function startTimer(event) {
   event.preventDefault();
-  const eventName = elements.eventName.value.trim();
-  const location = elements.location.value.trim();
+  const eventName = el.eventName.value.trim();
+  const location = el.location.value.trim();
+
   if (!eventName) {
-    elements.formMessage.textContent = "先写下要做的事。";
-    elements.eventName.focus();
+    el.formMessage.textContent = "先写下要做的事。";
+    el.eventName.focus();
     return;
   }
 
-  elements.formMessage.textContent = "";
-  const now = Date.now();
+  el.formMessage.textContent = "";
   activeTimer = {
-    id: createId(),
+    id: makeId(),
     eventName,
     location,
-    startTime: now,
+    startTime: Date.now(),
     paused: false,
     pauseStartedAt: null,
-    totalPausedMs: 0,
+    totalPausedMs: 0
   };
-  saveActiveTimer();
-  showTimerView();
+  saveActive();
+  showTimer();
 }
 
 function togglePause() {
   if (!activeTimer) return;
+
   if (activeTimer.paused) {
     const now = Date.now();
-    activeTimer.totalPausedMs += Math.max(0, now - activeTimer.pauseStartedAt);
+    if (Number.isFinite(activeTimer.pauseStartedAt)) {
+      activeTimer.totalPausedMs += Math.max(0, now - activeTimer.pauseStartedAt);
+    }
     activeTimer.paused = false;
     activeTimer.pauseStartedAt = null;
   } else {
     activeTimer.paused = true;
     activeTimer.pauseStartedAt = Date.now();
   }
-  saveActiveTimer();
-  showTimerView();
+
+  saveActive();
+  showTimer();
 }
 
-async function completeTimer(status) {
-  if (!activeTimer || isCompleting) return;
-  isCompleting = true;
+async function finishTimer() {
+  if (!activeTimer || saving) return;
+  saving = true;
   stopTicker();
+
   const timer = { ...activeTimer };
+  const ms = elapsedMs();
+  const actualSeconds = Math.max(0, Math.floor(ms / 1000));
   const now = Date.now();
-  const activeElapsed = Math.max(0, now - timer.startTime - (timer.totalPausedMs || 0) - (timer.paused ? Math.max(0, now - timer.pauseStartedAt) : 0));
-  const actualMinutes = Math.max(0, Math.round(activeElapsed / 60_000));
+
   const record = {
     id: timer.id,
     eventName: timer.eventName,
-    location: timer.location,
+    location: timer.location || "",
     startTime: timer.startTime,
     endTime: now,
     plannedMinutes: 0,
-    actualMinutes,
-    status: "完成",
+    actualMinutes: Math.round(actualSeconds / 60),
+    actualSeconds,
+    status: "完成"
   };
 
   try {
-    await recordStore.put(record);
+    await records.put(record);
     activeTimer = null;
-    saveActiveTimer();
-    document.title = `${CONFIG.appName} · 极简事件计时器`;
-    elements.completeSummary.textContent = `${record.eventName} · 实际 ${record.actualMinutes}分钟`;
-    showView(elements.completeView);
+    saveActive();
+    document.title = APP_NAME + " · 极简事件计时器";
+    el.completeSummary.textContent = record.eventName + " · " + formatDuration(actualSeconds);
+    showView(el.completeView);
   } catch (error) {
     console.error(error);
-    elements.timerStatus.textContent = "记录暂时没有保存，请再试一次";
+    el.timerStatus.textContent = "保存失败，请再试一次";
     startTicker();
   } finally {
-    isCompleting = false;
+    saving = false;
   }
 }
 
-async function goHome() {
-  stopTicker();
-  document.title = `${CONFIG.appName} · 极简事件计时器`;
-  showView(elements.homeView);
-  await renderHistory();
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 function groupLabel(timestamp) {
-  const date = new Date(timestamp);
-  const today = new Date();
-  const startToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-  const startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  const difference = Math.round((startToday - startDate) / 86_400_000);
-  if (difference === 0) return "今天";
-  if (difference === 1) return "昨天";
-  return `${date.getMonth() + 1}月${date.getDate()}日`;
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+  const d = new Date(timestamp);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const thatDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const diff = Math.round((today - thatDay) / 86400000);
+  if (diff === 0) return "今天";
+  if (diff === 1) return "昨天";
+  return (d.getMonth() + 1) + "月" + d.getDate() + "日";
 }
 
 async function renderHistory() {
   try {
-    const records = await recordStore.all();
-    elements.recordCount.textContent = records.length ? `${records.length} 条` : "";
-    elements.emptyHistory.hidden = records.length > 0;
-    elements.historyList.innerHTML = "";
+    const list = await records.all();
+    el.recordCount.textContent = list.length ? list.length + " 条" : "";
+    el.emptyHistory.hidden = list.length > 0;
+    el.historyList.innerHTML = "";
+
     const groups = new Map();
-    records.forEach((record) => {
+    list.forEach((record) => {
       const label = groupLabel(record.endTime);
       if (!groups.has(label)) groups.set(label, []);
       groups.get(label).push(record);
     });
 
     groups.forEach((items, label) => {
-      const group = document.createElement("section");
-      group.className = "history-group";
-      group.innerHTML = `<h3 class="history-group-title">${escapeHtml(label)}</h3>`;
+      const section = document.createElement("section");
+      section.className = "history-group";
+      section.innerHTML = '<h3 class="history-group-title">' + escapeHtml(label) + "</h3>";
+
       items.forEach((record) => {
-        const date = new Date(record.endTime);
-        const dateText = date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
-        const time = date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
-        const minutes = record.actualMinutes;
-        const meta = [record.location, `${minutes}分钟`, record.status === "提前结束" ? "提前结束" : ""].filter(Boolean).join(" · ");
+        const d = new Date(record.endTime);
+        const dateText = (d.getMonth() + 1) + "/" + d.getDate();
+        const timeText = d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+        const seconds = Number.isFinite(record.actualSeconds)
+          ? record.actualSeconds
+          : Math.max(0, Math.round((record.actualMinutes || 0) * 60));
+        const meta = [record.location, formatDuration(seconds)].filter(Boolean).join(" · ");
+
         const row = document.createElement("article");
         row.className = "record-row";
-        row.innerHTML = `
-          <time class="record-time" datetime="${new Date(record.endTime).toISOString()}">${escapeHtml(dateText)}<br>${escapeHtml(time)}</time>
-          <div class="record-main"><strong>${escapeHtml(record.eventName)}</strong><span>${escapeHtml(meta)}</span></div>
-          <div class="record-actions">
-            <button class="record-action" type="button" data-action="edit" data-id="${escapeHtml(record.id)}">修改</button>
-            <button class="record-action record-action--delete" type="button" data-action="delete" data-id="${escapeHtml(record.id)}">删除</button>
-          </div>`;
-        group.append(row);
+        row.innerHTML =
+          '<time class="record-time" datetime="' + new Date(record.endTime).toISOString() + '">' +
+          escapeHtml(dateText) + "<br>" + escapeHtml(timeText) + "</time>" +
+          '<div class="record-main"><strong>' + escapeHtml(record.eventName) + "</strong><span>" + escapeHtml(meta) + "</span></div>" +
+          '<div class="record-actions">' +
+          '<button class="record-action" type="button" data-action="edit" data-id="' + escapeHtml(record.id) + '">修改</button>' +
+          '<button class="record-action record-action--delete" type="button" data-action="delete" data-id="' + escapeHtml(record.id) + '">删除</button>' +
+          "</div>";
+        section.appendChild(row);
       });
-      elements.historyList.append(group);
+
+      el.historyList.appendChild(section);
     });
-    renderRecentChoices(records);
+
+    renderRecent(list);
   } catch (error) {
     console.error(error);
-    elements.emptyHistory.hidden = false;
-    elements.emptyHistory.querySelector("p").textContent = "暂时读不到记录";
+    el.emptyHistory.hidden = false;
+    el.emptyHistory.querySelector("p").textContent = "暂时读不到记录";
   }
 }
 
-function renderRecentChoices(records) {
-  const unique = (key) => [...new Set(records.map((record) => record[key]?.trim()).filter(Boolean))].slice(0, 4);
-  const render = (container, values, input) => {
+function renderRecent(list) {
+  const unique = (key) => Array.from(new Set(list.map((r) => (r[key] || "").trim()).filter(Boolean))).slice(0, 4);
+
+  function draw(container, values, input) {
     container.innerHTML = "";
     values.forEach((value) => {
       const button = document.createElement("button");
@@ -393,172 +348,160 @@ function renderRecentChoices(records) {
         input.value = value;
         input.focus();
       });
-      container.append(button);
+      container.appendChild(button);
     });
-  };
-  render(elements.recentEvents, unique("eventName"), elements.eventName);
-  render(elements.recentLocations, unique("location"), elements.location);
+  }
+
+  draw(el.recentEvents, unique("eventName"), el.eventName);
+  draw(el.recentLocations, unique("location"), el.location);
 }
 
 async function handleHistoryClick(event) {
   const button = event.target.closest("[data-action]");
   if (!button) return;
-  const record = await recordStore.get(button.dataset.id);
+  const record = await records.get(button.dataset.id);
   if (!record) return;
+
   if (button.dataset.action === "edit") {
-    elements.editRecordId.value = record.id;
-    elements.editEventName.value = record.eventName;
-    elements.editLocation.value = record.location || "";
-    elements.recordDialog.showModal();
+    el.editRecordId.value = record.id;
+    el.editEventName.value = record.eventName || "";
+    el.editLocation.value = record.location || "";
+    if (typeof el.recordDialog.showModal === "function") el.recordDialog.showModal();
+    else el.recordDialog.setAttribute("open", "");
   }
+
   if (button.dataset.action === "delete") {
-    if (!confirm(`删除“${record.eventName}”这条记录吗？`)) return;
-    await recordStore.delete(record.id);
+    if (!confirm("删除“" + record.eventName + "”这条记录吗？")) return;
+    await records.delete(record.id);
     await renderHistory();
   }
 }
 
 async function saveRecordEdit(event) {
   event.preventDefault();
-  const name = elements.editEventName.value.trim();
-  if (!name) {
-    elements.editEventName.focus();
-    return;
-  }
-  const record = await recordStore.get(elements.editRecordId.value);
+  const name = el.editEventName.value.trim();
+  if (!name) return;
+  const record = await records.get(el.editRecordId.value);
   if (!record) return;
-  await recordStore.put({ ...record, eventName: name, location: elements.editLocation.value.trim() });
-  elements.recordDialog.close();
+  record.eventName = name;
+  record.location = el.editLocation.value.trim();
+  await records.put(record);
+  el.recordDialog.close();
   await renderHistory();
 }
 
 async function exportData() {
-  const records = await recordStore.all();
-  const payload = { app: CONFIG.appName, version: 1, exportedAt: new Date().toISOString(), records };
+  const list = await records.all();
+  const payload = { app: APP_NAME, version: 1, exportedAt: new Date().toISOString(), records: list };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = `林林时间-记录-${new Date().toISOString().slice(0, 10)}.json`;
-  link.click();
-  URL.revokeObjectURL(link.href);
-  elements.settingsMessage.textContent = `已导出 ${records.length} 条记录。`;
-}
-
-function isValidRecord(record) {
-  return record && typeof record.id === "string" && typeof record.eventName === "string" &&
-    Number.isFinite(record.startTime) && Number.isFinite(record.endTime) &&
-    Number.isFinite(record.plannedMinutes) && Number.isFinite(record.actualMinutes) &&
-    ["完成", "提前结束"].includes(record.status);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "林林时间-记录-" + new Date().toISOString().slice(0, 10) + ".json";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  el.settingsMessage.textContent = "已导出 " + list.length + " 条记录。";
 }
 
 async function importData(event) {
-  const [file] = event.target.files;
+  const file = event.target.files && event.target.files[0];
   event.target.value = "";
   if (!file) return;
   try {
     const payload = JSON.parse(await file.text());
-    if (!payload || payload.version !== 1 || !Array.isArray(payload.records) || !payload.records.every(isValidRecord)) {
-      throw new Error("格式不正确");
+    if (!payload || !Array.isArray(payload.records)) throw new Error("bad format");
+    for (const record of payload.records) {
+      if (record && typeof record.id === "string" && typeof record.eventName === "string") {
+        await records.put(record);
+      }
     }
-    for (const record of payload.records) await recordStore.put(record);
-    elements.settingsMessage.textContent = `已导入 ${payload.records.length} 条记录。`;
+    el.settingsMessage.textContent = "导入完成。";
     await renderHistory();
-  } catch {
-    elements.settingsMessage.textContent = "这个文件不像“林林时间”的备份，请换一个。";
+  } catch (error) {
+    console.error(error);
+    el.settingsMessage.textContent = "导入失败，请确认是正确的 JSON 备份。";
   }
 }
 
-async function clearAllData() {
+async function clearAll() {
   if (!confirm("清空全部记录吗？这个操作不能撤销。")) return;
-  await recordStore.clear();
-  elements.settingsMessage.textContent = "记录已经清空。";
+  await records.clear();
+  el.settingsMessage.textContent = "记录已经清空。";
   await renderHistory();
 }
 
-function setupDurationOptions() {
-  // 正计时模式不再需要预设时长；保留空函数以兼容旧代码结构。
+function closeDialog(dialog) {
+  if (dialog && typeof dialog.close === "function") dialog.close();
+  else if (dialog) dialog.removeAttribute("open");
 }
 
-function setupVisualAssets() {
-  document.documentElement.style.setProperty("--person-art", `url("${CONFIG.imagePaths.person}")`);
-  document.documentElement.style.setProperty("--cat-art", `url("${CONFIG.imagePaths.cat}")`);
-  $$('[data-hide-on-error] img').forEach((image) => {
-    image.addEventListener("error", () => image.closest("[data-hide-on-error]")?.remove());
-  });
+async function goHome() {
+  stopTicker();
+  document.title = APP_NAME + " · 极简事件计时器";
+  showView(el.homeView);
+  await renderHistory();
 }
 
-function registerWebMCPTools() {
-  const context = document.modelContext;
-  if (!context?.registerTool) return;
+async function clearOldSiteCaches() {
   try {
-    void Promise.resolve(context.registerTool({
-      name: "start_timer",
-      title: "开始计时",
-      description: "为一个事件开始本地倒计时，并在页面中显示计时状态。",
-      inputSchema: {
-        type: "object",
-        properties: {
-          eventName: { type: "string", minLength: 1, maxLength: 60 },
-          location: { type: "string", maxLength: 60 },
-          minutes: { type: "integer", minimum: 1, maximum: 1440 },
-        },
-        required: ["eventName", "minutes"],
-        additionalProperties: false,
-      },
-      annotations: { readOnlyHint: false, untrustedContentHint: false },
-      execute(input) {
-        if (!input || typeof input.eventName !== "string" || !input.eventName.trim() || !Number.isInteger(input.minutes) || input.minutes < 1 || input.minutes > 1440) {
-          throw new Error("事件名称或分钟数无效");
-        }
-        elements.eventName.value = input.eventName.trim();
-        elements.location.value = typeof input.location === "string" ? input.location.trim() : "";
-        elements.customMinutes.value = input.minutes;
-        elements.timerForm.requestSubmit();
-        return { status: "started", eventName: input.eventName.trim(), minutes: input.minutes };
-      },
-    }));
-  } catch (error) { console.debug("WebMCP unavailable", error); }
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.filter((k) => k.startsWith("quiet-timer-")).map((k) => caches.delete(k)));
+    }
+  } catch (error) {
+    console.debug("cache cleanup skipped", error);
+  }
 }
 
 async function init() {
-  setupDurationOptions();
-  setupVisualAssets();
-  elements.timerForm.addEventListener("submit", startTimer);
-  elements.pauseButton.addEventListener("click", togglePause);
-  elements.finishEarlyButton.addEventListener("click", () => {
-    if (confirm("现在结束计时吗？这段时间会被记录。")) void completeTimer("完成");
+  await clearOldSiteCaches();
+
+  el.timerForm.addEventListener("submit", startTimer);
+  el.pauseButton.addEventListener("click", togglePause);
+  el.finishButton.addEventListener("click", () => {
+    if (confirm("现在结束计时吗？这段时间会被记录。")) finishTimer();
   });
-  elements.completeHomeButton.addEventListener("click", goHome);
-  elements.historyList.addEventListener("click", handleHistoryClick);
-  elements.recordForm.addEventListener("submit", saveRecordEdit);
-  elements.closeRecordButton.addEventListener("click", () => elements.recordDialog.close());
-  elements.cancelRecordButton.addEventListener("click", () => elements.recordDialog.close());
-  elements.settingsButton.addEventListener("click", () => {
-    elements.settingsMessage.textContent = "";
-    elements.settingsDialog.showModal();
+  el.completeHomeButton.addEventListener("click", goHome);
+
+  el.historyList.addEventListener("click", handleHistoryClick);
+  el.recordForm.addEventListener("submit", saveRecordEdit);
+  el.closeRecordButton.addEventListener("click", () => closeDialog(el.recordDialog));
+  el.cancelRecordButton.addEventListener("click", () => closeDialog(el.recordDialog));
+
+  el.settingsButton.addEventListener("click", () => {
+    el.settingsMessage.textContent = "";
+    if (typeof el.settingsDialog.showModal === "function") el.settingsDialog.showModal();
+    else el.settingsDialog.setAttribute("open", "");
   });
-  elements.closeSettingsButton.addEventListener("click", () => elements.settingsDialog.close());
-  elements.exportButton.addEventListener("click", exportData);
-  elements.importInput.addEventListener("change", importData);
-  elements.clearButton.addEventListener("click", clearAllData);
+  el.closeSettingsButton.addEventListener("click", () => closeDialog(el.settingsDialog));
+  el.exportButton.addEventListener("click", exportData);
+  el.importInput.addEventListener("change", importData);
+  el.clearButton.addEventListener("click", clearAll);
+
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && activeTimer) updateTimerDisplay();
+    if (!document.hidden && activeTimer) updateClock();
   });
-  window.addEventListener("pageshow", () => { if (activeTimer) updateTimerDisplay(); });
+  window.addEventListener("pageshow", () => {
+    if (activeTimer) updateClock();
+  });
 
-  try { await openDatabase(); } catch (error) { console.error(error); }
-  await renderHistory();
-  activeTimer = loadActiveTimer();
-  if (activeTimer) {
-    showTimerView();
-  } else {
-    showView(elements.homeView);
+  try {
+    await openDB();
+    await renderHistory();
+  } catch (error) {
+    console.error(error);
   }
-  registerWebMCPTools();
+
+  activeTimer = loadActive();
+  if (activeTimer) showTimer();
+  else showView(el.homeView);
 }
 
-if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js").catch(console.error));
-}
-
-void init();
+init().catch((error) => {
+  console.error(error);
+  if (el.formMessage) el.formMessage.textContent = "页面初始化失败，请刷新后再试。";
+});
