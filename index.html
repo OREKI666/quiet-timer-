@@ -41,21 +41,6 @@
               <input id="location" name="location" class="text-input" type="text" maxlength="60" placeholder="比如：家、书桌" autocomplete="off" />
               <div id="recentLocations" class="quick-list" aria-label="最近使用的地点"></div>
 
-              <fieldset class="duration-fieldset">
-                <legend class="field-label">留多少分钟</legend>
-                <div id="durationOptions" class="duration-options" aria-label="快捷时间">
-                  <button class="duration-chip" type="button" data-minutes="15">15</button>
-                  <button class="duration-chip duration-chip--selected" type="button" data-minutes="25">25</button>
-                  <button class="duration-chip" type="button" data-minutes="45">45</button>
-                  <button class="duration-chip" type="button" data-minutes="60">60</button>
-                  <label class="custom-duration">
-                    <span class="sr-only">自定义分钟数</span>
-                    <input id="customMinutes" type="number" inputmode="numeric" min="1" max="1440" placeholder="自定" />
-                    <span>分</span>
-                  </label>
-                </div>
-              </fieldset>
-
               <p id="formMessage" class="form-message" role="alert"></p>
               <div class="launch-row">
                 <div class="source-sprite source-sprite--cat cat-start" aria-hidden="true"></div>
@@ -87,7 +72,7 @@
           <p id="timerStatus" class="timer-status" aria-live="polite">正在计时</p>
           <div class="timer-actions">
             <button id="pauseButton" class="secondary-button" type="button">暂停</button>
-            <button id="finishEarlyButton" class="quiet-danger-button" type="button">提前结束</button>
+            <button id="finishEarlyButton" class="quiet-danger-button" type="button">结束计时</button>
           </div>
         </div>
         <span class="pencil-scratch pencil-scratch--one" aria-hidden="true"></span>
