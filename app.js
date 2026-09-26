@@ -355,13 +355,14 @@ async function renderHistory() {
       group.innerHTML = `<h3 class="history-group-title">${escapeHtml(label)}</h3>`;
       items.forEach((record) => {
         const date = new Date(record.endTime);
+        const dateText = date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
         const time = date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
         const minutes = record.actualMinutes;
         const meta = [record.location, `${minutes}分钟`, record.status === "提前结束" ? "提前结束" : ""].filter(Boolean).join(" · ");
         const row = document.createElement("article");
         row.className = "record-row";
         row.innerHTML = `
-          <time class="record-time" datetime="${new Date(record.endTime).toISOString()}">${escapeHtml(time)}</time>
+          <time class="record-time" datetime="${new Date(record.endTime).toISOString()}">${escapeHtml(dateText)}<br>${escapeHtml(time)}</time>
           <div class="record-main"><strong>${escapeHtml(record.eventName)}</strong><span>${escapeHtml(meta)}</span></div>
           <div class="record-actions">
             <button class="record-action" type="button" data-action="edit" data-id="${escapeHtml(record.id)}">修改</button>
