@@ -476,13 +476,7 @@ async function clearAllData() {
 }
 
 function setupDurationOptions() {
-  const chips = $$(".duration-chip");
-  chips.forEach((chip) => chip.addEventListener("click", () => {
-    selectedMinutes = Number(chip.dataset.minutes);
-    elements.customMinutes.value = "";
-    chips.forEach((item) => item.classList.toggle("duration-chip--selected", item === chip));
-  }));
-  elements.customMinutes.addEventListener("input", () => chips.forEach((chip) => chip.classList.remove("duration-chip--selected")));
+  // 正计时模式不再需要预设时长；保留空函数以兼容旧代码结构。
 }
 
 function setupVisualAssets() {
