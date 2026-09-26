@@ -7,8 +7,8 @@
   --pencil-dim: #62625f;
   --line: rgba(229, 229, 223, 0.72);
   --line-soft: rgba(229, 229, 223, 0.28);
-  --person-art: none;
-  --cat-art: none;
+  --person-art: url("./images/person-mark.png");
+  --cat-art: url("./images/cat-mark.png");
   --font-hand: "KaiTi", "STKaiti", "Segoe Print", "Comic Sans MS", cursive;
   --font-body: "KaiTi", "STKaiti", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
