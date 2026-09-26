@@ -1,4 +1,4 @@
-const CACHE_NAME = "quiet-timer-v6";
+const CACHE_NAME = "quiet-timer-v7";
 const CORE_SHELL = [
   "./",
   "./index.html",
